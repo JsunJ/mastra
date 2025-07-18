@@ -39,6 +39,7 @@ export interface Config<
   workflows?: TWorkflows;
   tts?: TTTS;
   telemetry?: OtelConfig;
+  idGenerator?: () => string;
   deployer?: MastraDeployer;
   server?: ServerConfig;
   mcpServers?: TMCPServers;
@@ -92,6 +93,7 @@ export class Mastra<
   #server?: ServerConfig;
   #mcpServers?: TMCPServers;
   #bundler?: BundlerConfig;
+  #idGenerator?: () => string;
 
   /**
    * @deprecated use getTelemetry() instead
@@ -112,6 +114,25 @@ export class Mastra<
    */
   get memory() {
     return this.#memory;
+  }
+
+  public getIdGenerator() {
+    return this.#idGenerator;
+  }
+
+  /**
+   * Generate a unique identifier using the configured generator or default to crypto.randomUUID()
+   * @returns A unique string ID
+   */
+  public generateId(): string {
+    if (this.#idGenerator) {
+      return this.#idGenerator();
+    }
+    return crypto.randomUUID();
+  }
+
+  public setIdGenerator(idGenerator: () => string) {
+    this.#idGenerator = idGenerator;
   }
 
   constructor(
@@ -152,6 +173,8 @@ export class Mastra<
       }
     }
     this.#logger = logger;
+
+    this.#idGenerator = config?.idGenerator;
 
     let storage = config?.storage;
 
