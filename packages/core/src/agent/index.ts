@@ -1,4 +1,3 @@
-import { randomUUID } from 'crypto';
 import type {
   CoreMessage,
   GenerateObjectResult,
@@ -1606,7 +1605,7 @@ Message ${msg.threadId && msg.threadId !== threadObject.id ? 'from previous conv
           const input = userInputMessages
             .map(message => (typeof message.content === 'string' ? message.content : ''))
             .join('\n');
-          const runIdToUse = runId || crypto.randomUUID();
+          const runIdToUse = runId || this.generateId();
           for (const metric of Object.values(this.evals || {})) {
             executeHook(AvailableHooks.ON_GENERATION, {
               input,
@@ -1687,7 +1686,7 @@ Message ${msg.threadId && msg.threadId !== threadObject.id ? 'from previous conv
     const generateMessageId =
       `experimental_generateMessageId` in args && typeof args.experimental_generateMessageId === `function`
         ? (args.experimental_generateMessageId as IDGenerator)
-        : undefined;
+        : () => this.generateId();
 
     const threadFromArgs = resolveThreadIdFromArgs({ ...args, ...generateOptions });
     const resourceId = args.memory?.resource || resourceIdFromArgs;
@@ -1698,7 +1697,7 @@ Message ${msg.threadId && msg.threadId !== threadObject.id ? 'from previous conv
         `[Agent:${this.name}] - No memory is configured but resourceId and threadId were passed in args. This will not work.`,
       );
     }
-    const runId = args.runId || randomUUID();
+    const runId = args.runId || this.generateId();
     const instructions = args.instructions || (await this.getInstructions({ runtimeContext }));
     const llm = await this.getLLM({ runtimeContext });
 
@@ -1929,7 +1928,7 @@ Message ${msg.threadId && msg.threadId !== threadObject.id ? 'from previous conv
     const generateMessageId =
       `experimental_generateMessageId` in args && typeof args.experimental_generateMessageId === `function`
         ? (args.experimental_generateMessageId as IDGenerator)
-        : undefined;
+        : () => this.generateId();
 
     const threadFromArgs = resolveThreadIdFromArgs({ ...args, ...streamOptions });
     const resourceId = args.memory?.resource || resourceIdFromArgs;
@@ -1941,7 +1940,7 @@ Message ${msg.threadId && msg.threadId !== threadObject.id ? 'from previous conv
       );
     }
 
-    const runId = args.runId || randomUUID();
+    const runId = args.runId || this.generateId();
     const instructions = args.instructions || (await this.getInstructions({ runtimeContext }));
     const llm = await this.getLLM({ runtimeContext });
 

@@ -9,6 +9,7 @@ export class MastraBase {
   protected logger: IMastraLogger;
   name?: string;
   telemetry?: Telemetry;
+  protected idGenerator?: () => string;
 
   constructor({ component, name }: { component?: RegisteredLogger; name?: string }) {
     this.component = component || RegisteredLogger.LLM;
@@ -38,6 +39,29 @@ export class MastraBase {
     if (this.component !== RegisteredLogger.LLM) {
       this.logger.debug(`Telemetry updated [component=${this.component}] [name=${this.telemetry.name}]`);
     }
+  }
+
+  /**
+   * Set the ID generator function
+   * @param idGenerator Function that returns a unique string ID
+   */
+  __setIdGenerator(idGenerator: () => string) {
+    this.idGenerator = idGenerator;
+
+    if (this.component !== RegisteredLogger.LLM) {
+      this.logger.debug(`ID generator updated [component=${this.component}] [name=${this.name}]`);
+    }
+  }
+
+  /**
+   * Generate a unique identifier using the configured generator or default to crypto.randomUUID()
+   * @returns A unique string ID
+   */
+  generateId(): string {
+    if (this.idGenerator) {
+      return this.idGenerator();
+    }
+    return crypto.randomUUID();
   }
 
   /**

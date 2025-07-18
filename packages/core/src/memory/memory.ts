@@ -385,7 +385,7 @@ export abstract class MastraMemory extends MastraBase {
    * @returns A unique string ID
    */
   public generateId(): string {
-    return crypto.randomUUID();
+    return super.generateId();
   }
 
   /**

@@ -39,6 +39,11 @@ export interface Config<
   workflows?: TWorkflows;
   tts?: TTTS;
   telemetry?: OtelConfig;
+  /** 
+   * Custom ID generator function for generating unique identifiers across all components.
+   * If not provided, defaults to crypto.randomUUID()
+   */
+  idGenerator?: () => string;
   deployer?: MastraDeployer;
   server?: ServerConfig;
   mcpServers?: TMCPServers;
@@ -92,6 +97,7 @@ export class Mastra<
   #server?: ServerConfig;
   #mcpServers?: TMCPServers;
   #bundler?: BundlerConfig;
+  #idGenerator?: () => string;
 
   /**
    * @deprecated use getTelemetry() instead
@@ -153,6 +159,11 @@ export class Mastra<
     }
     this.#logger = logger;
 
+    /*
+      ID Generator
+    */
+    this.#idGenerator = config?.idGenerator;
+
     let storage = config?.storage;
 
     if (storage) {
@@ -211,6 +222,9 @@ export class Mastra<
         server.setId(key);
         if (this.#telemetry) {
           server.__setTelemetry(this.#telemetry);
+        }
+        if (this.#idGenerator) {
+          server.__setIdGenerator(this.#idGenerator);
         }
 
         server.__registerMastra(this);
@@ -283,6 +297,10 @@ do:
           vectors: this.#vectors,
         });
 
+        if (this.#idGenerator) {
+          agent.__setIdGenerator(this.#idGenerator);
+        }
+
         agents[key] = agent;
       });
     }
@@ -298,6 +316,9 @@ do:
     if (config?.networks) {
       Object.entries(config.networks).forEach(([key, network]) => {
         network.__registerMastra(this);
+        if (this.#idGenerator) {
+          network.__setIdGenerator?.(this.#idGenerator);
+        }
         // @ts-ignore
         this.#networks[key] = network;
       });
@@ -306,6 +327,9 @@ do:
     if (config?.vnext_networks) {
       Object.entries(config.vnext_networks).forEach(([key, network]) => {
         network.__registerMastra(this);
+        if (this.#idGenerator) {
+          network.__setIdGenerator?.(this.#idGenerator);
+        }
         // @ts-ignore
         this.#vnext_networks[key] = network;
       });
@@ -328,6 +352,9 @@ do:
           tts: this.#tts,
           vectors: this.#vectors,
         });
+        if (this.#idGenerator) {
+          workflow.__setIdGenerator?.(this.#idGenerator);
+        }
         // @ts-ignore
         this.#legacy_workflows[key] = workflow;
 
@@ -354,6 +381,9 @@ do:
           tts: this.#tts,
           vectors: this.#vectors,
         });
+        if (this.#idGenerator) {
+          workflow.__setIdGenerator?.(this.#idGenerator);
+        }
         // @ts-ignore
         this.#workflows[key] = workflow;
       });
@@ -611,6 +641,54 @@ do:
 
   public getTelemetry() {
     return this.#telemetry;
+  }
+
+  public getIdGenerator() {
+    return this.#idGenerator;
+  }
+
+  public setIdGenerator(idGenerator: () => string) {
+    this.#idGenerator = idGenerator;
+
+    if (this.#agents) {
+      Object.keys(this.#agents).forEach(key => {
+        this.#agents?.[key]?.__setIdGenerator(idGenerator);
+      });
+    }
+
+    if (this.#memory) {
+      this.#memory.__setIdGenerator(idGenerator);
+    }
+
+    if (this.#mcpServers) {
+      Object.keys(this.#mcpServers).forEach(key => {
+        this.#mcpServers?.[key]?.__setIdGenerator(idGenerator);
+      });
+    }
+
+    if (this.#networks) {
+      Object.keys(this.#networks).forEach(key => {
+        this.#networks?.[key]?.__setIdGenerator?.(idGenerator);
+      });
+    }
+
+    if (this.#vnext_networks) {
+      Object.keys(this.#vnext_networks).forEach(key => {
+        this.#vnext_networks?.[key]?.__setIdGenerator?.(idGenerator);
+      });
+    }
+
+    if (this.#legacy_workflows) {
+      Object.keys(this.#legacy_workflows).forEach(key => {
+        this.#legacy_workflows?.[key]?.__setIdGenerator?.(idGenerator);
+      });
+    }
+
+    if (this.#workflows) {
+      Object.keys(this.#workflows).forEach(key => {
+        this.#workflows?.[key]?.__setIdGenerator?.(idGenerator);
+      });
+    }
   }
 
   public getMemory() {
