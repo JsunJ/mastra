@@ -2,6 +2,81 @@ import { trace, context, SpanStatusCode, SpanKind, propagation } from '@opentele
 
 import { hasActiveTelemetry, getBaggageValues } from './utility';
 
+// Helper function to detect if a result is from a streaming method
+function isStreamingResult(result: any, methodName: string): boolean {
+  // Check method name first (most reliable)
+  if (methodName === 'stream' || methodName === 'streamVNext') {
+    return true;
+  }
+
+  // Check for streaming result properties (backup detection)
+  if (result && typeof result === 'object') {
+    return (
+      'textStream' in result || 'objectStream' in result || 'usagePromise' in result || 'finishReasonPromise' in result
+    );
+  }
+
+  return false;
+}
+
+// Helper function to enhance streaming arguments with telemetry capture
+function enhanceStreamingArgumentsWithTelemetry(args: any[], span: any, spanName: string, methodName: string): any[] {
+  // For Agent.stream(), the arguments are: [messages, streamOptions]
+  if (methodName === 'stream' || methodName === 'streamVNext') {
+    // Clone arguments to avoid mutating originals
+    const enhancedArgs = [...args];
+
+    // Get or create streamOptions (second argument)
+    const streamOptions = enhancedArgs[1] || {};
+    const enhancedStreamOptions = { ...streamOptions };
+
+    // Get the original onFinish callback
+    const originalOnFinish = enhancedStreamOptions.onFinish;
+
+    // Create our telemetry-enhanced onFinish callback
+    enhancedStreamOptions.onFinish = async (finishData: any) => {
+      try {
+        // Capture the resolved telemetry data
+        const telemetryData = {
+          text: finishData.text,
+          usage: finishData.usage,
+          finishReason: finishData.finishReason,
+          toolCalls: finishData.toolCalls,
+          toolResults: finishData.toolResults,
+          warnings: finishData.warnings,
+          // Add any other valuable fields
+        };
+
+        // Set the span attribute with real resolved data
+        span.setAttribute(`${spanName}.result`, JSON.stringify(telemetryData));
+        span.setStatus({ code: SpanStatusCode.OK });
+        span.end();
+      } catch {
+        // Handle telemetry errors gracefully - never break the user's flow
+        span.setAttribute(`${spanName}.result`, '[Telemetry Capture Error]');
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        span.end();
+      }
+
+      // Always call the original onFinish callback
+      if (originalOnFinish) {
+        return await originalOnFinish(finishData);
+      }
+    };
+
+    // Replace the streamOptions in the arguments
+    enhancedArgs[1] = enhancedStreamOptions;
+
+    // Mark span as streaming (so we don't end it in .finally())
+    (span as any)._mastraStreamingSpan = true;
+
+    return enhancedArgs;
+  }
+
+  // For non-streaming methods, return original arguments
+  return args;
+}
+
 // Decorator factory that takes optional spanName
 export function withSpan(options: {
   spanName?: string;
@@ -79,21 +154,49 @@ export function withSpan(options: {
 
       let result;
       try {
+        // For streaming methods, enhance arguments with telemetry capture before calling
+        const enhancedArgs = isStreamingResult(null, methodName)
+          ? enhanceStreamingArgumentsWithTelemetry(args, span, spanName, methodName)
+          : args;
+
         // Call the original method within the context
-        result = context.with(ctx, () => originalMethod.apply(this, args));
+        result = context.with(ctx, () => originalMethod.apply(this, enhancedArgs));
 
         // Handle promises
         if (result instanceof Promise) {
           return result
             .then(resolvedValue => {
-              try {
-                span.setAttribute(`${spanName}.result`, JSON.stringify(resolvedValue));
-              } catch {
-                span.setAttribute(`${spanName}.result`, '[Not Serializable]');
+              // Check if this is a streaming result that needs deferred telemetry
+              if (isStreamingResult(resolvedValue, methodName)) {
+                // For streaming results, the span will be completed by the enhanced onFinish callback
+                // Just return the resolved value as-is since we already enhanced the arguments
+                return resolvedValue;
+              } else {
+                // For regular promises, capture result immediately (existing behavior)
+                try {
+                  span.setAttribute(`${spanName}.result`, JSON.stringify(resolvedValue));
+                } catch {
+                  span.setAttribute(`${spanName}.result`, '[Not Serializable]');
+                }
+                return resolvedValue;
               }
-              return resolvedValue;
             })
-            .finally(() => span.end());
+            .catch(error => {
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: error instanceof Error ? error.message : 'Unknown error',
+              });
+              if (error instanceof Error) {
+                span.recordException(error);
+              }
+              throw error;
+            })
+            .finally(() => {
+              // Only end span if it's not a streaming span (which will be ended later)
+              if (!(span as any)._mastraStreamingSpan) {
+                span.end();
+              }
+            });
         }
 
         // Record result for non-promise returns
