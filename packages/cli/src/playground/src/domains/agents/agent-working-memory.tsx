@@ -2,9 +2,10 @@ import { useWorkingMemory } from '@mastra/playground-ui';
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { RefreshCcwIcon, ExternalLink } from 'lucide-react';
+import { RefreshCcwIcon, ExternalLink, Eye } from 'lucide-react';
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard';
 import { CodeDisplay } from '@/components/ui/code-display';
+import { MarkdownRenderer } from '@/components/ui/markdown-renderer';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useMemoryConfig } from '@/hooks/use-memory';
@@ -29,6 +30,7 @@ export const AgentWorkingMemory = ({ agentId }: AgentWorkingMemoryProps) => {
   });
   const [editValue, setEditValue] = useState<string>(workingMemoryData ?? '');
   const [isEditing, setIsEditing] = useState(false);
+  const [isPreview, setIsPreview] = useState(false);
 
   React.useEffect(() => {
     setEditValue(workingMemoryData ?? '');
@@ -68,14 +70,7 @@ export const AgentWorkingMemory = ({ agentId }: AgentWorkingMemoryProps) => {
 
       {isWorkingMemoryEnabled ? (
         <>
-          {!isEditing ? (
-            <CodeDisplay
-              content={workingMemoryData || ''}
-              isCopied={isCopied}
-              onCopy={handleCopy}
-              className="bg-surface3 text-sm font-mono min-h-[150px] border border-border1 rounded-lg"
-            />
-          ) : (
+          {isEditing ? (
             <textarea
               className="w-full min-h-[150px] p-3 border border-border1 rounded-lg bg-surface3 font-mono text-sm text-icon5 resize-none focus:outline-none focus:ring-2 focus:ring-surface4"
               value={editValue}
@@ -83,18 +78,47 @@ export const AgentWorkingMemory = ({ agentId }: AgentWorkingMemoryProps) => {
               disabled={isUpdating}
               placeholder="Enter working memory content..."
             />
+          ) : isPreview ? (
+            <div className="bg-surface3 border border-border1 rounded-lg p-3 min-h-[150px] prose prose-sm prose-invert max-w-none">
+              <MarkdownRenderer>{workingMemoryData || 'No content to preview'}</MarkdownRenderer>
+            </div>
+          ) : (
+            <CodeDisplay
+              content={workingMemoryData || ''}
+              isCopied={isCopied}
+              onCopy={handleCopy}
+              className="bg-surface3 text-sm font-mono min-h-[150px] border border-border1 rounded-lg"
+            />
           )}
           <div className="flex gap-2">
             {!isEditing ? (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setIsEditing(true)}
-                disabled={!threadExists || isUpdating}
-                className="text-xs"
-              >
-                Edit Working Memory
-              </Button>
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setIsEditing(true);
+                    setIsPreview(false);
+                  }}
+                  disabled={!threadExists || isUpdating}
+                  className="text-xs"
+                >
+                  Edit Working Memory
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setIsPreview(!isPreview);
+                    setIsEditing(false);
+                  }}
+                  disabled={!threadExists || isUpdating}
+                  className="text-xs"
+                >
+                  <Eye className="w-3 h-3 mr-1" />
+                  {isPreview ? 'Raw' : 'Preview'}
+                </Button>
+              </>
             ) : (
               <>
                 <Button
@@ -104,6 +128,7 @@ export const AgentWorkingMemory = ({ agentId }: AgentWorkingMemoryProps) => {
                     try {
                       await updateWorkingMemory(editValue);
                       setIsEditing(false);
+                      setIsPreview(false);
                     } catch (error) {
                       console.error('Failed to update working memory:', error);
                       toast.error('Failed to update working memory');
@@ -120,6 +145,7 @@ export const AgentWorkingMemory = ({ agentId }: AgentWorkingMemoryProps) => {
                   onClick={() => {
                     setEditValue(workingMemoryData ?? '');
                     setIsEditing(false);
+                    setIsPreview(false);
                   }}
                   disabled={isUpdating}
                   className="text-xs"
