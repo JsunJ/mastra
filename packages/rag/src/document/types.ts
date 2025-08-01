@@ -79,6 +79,15 @@ export type MarkdownChunkOptions = BaseChunkOptions & {
   stripHeaders?: boolean;
 };
 
+export type SemanticMarkdownChunkOptions = BaseChunkOptions & {
+  joinThreshold?: number;
+  maxSemanticSize?: number;
+  encodingName?: TiktokenEncoding;
+  modelName?: TiktokenModel;
+  allowedSpecial?: Set<string> | 'all';
+  disallowedSpecial?: Set<string> | 'all';
+};
+
 export type HTMLChunkOptions = BaseChunkOptions & {
   headers?: [string, string][];
   sections?: [string, string][];
@@ -102,7 +111,16 @@ export type SentenceChunkOptions = BaseChunkOptions & {
   fallbackToCharacters?: boolean;
 };
 
-export type ChunkStrategy = 'recursive' | 'character' | 'token' | 'markdown' | 'html' | 'json' | 'latex' | 'sentence';
+export type ChunkStrategy =
+  | 'recursive'
+  | 'character'
+  | 'token'
+  | 'markdown'
+  | 'html'
+  | 'json'
+  | 'latex'
+  | 'sentence'
+  | 'semantic-markdown';
 
 export type ChunkParams =
   | ({ strategy?: 'character' } & CharacterChunkOptions & { extract?: ExtractParams })
@@ -112,4 +130,5 @@ export type ChunkParams =
   | ({ strategy: 'html' } & HTMLChunkOptions & { extract?: ExtractParams })
   | ({ strategy: 'json' } & JsonChunkOptions & { extract?: ExtractParams })
   | ({ strategy: 'latex' } & LatexChunkOptions & { extract?: ExtractParams })
-  | ({ strategy: 'sentence' } & SentenceChunkOptions & { extract?: ExtractParams });
+  | ({ strategy: 'sentence' } & SentenceChunkOptions & { extract?: ExtractParams })
+  | ({ strategy: 'semantic-markdown' } & SemanticMarkdownChunkOptions & { extract?: ExtractParams });

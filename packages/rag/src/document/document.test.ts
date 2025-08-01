@@ -2330,3 +2330,306 @@ function findCommonSubstring(str1: string, str2: string): string {
 
   return longest;
 }
+
+describe('chunkSemanticMarkdown', () => {
+  it('should merge small sections based on token threshold', async () => {
+    const text = `# Introduction
+Brief intro paragraph.
+
+## Setup Guide  
+Short setup instructions.
+
+### Prerequisites
+Very short list.
+
+### Installation Steps
+Very detailed installation process with code examples and explanations that would normally be quite long but in this test we'll keep it moderate length for testing purposes.
+
+## Advanced Configuration
+Another section with moderate content for testing the merging algorithm.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 200,
+      maxSemanticSize: 500,
+    });
+
+    const chunks = doc.getText();
+    const docs = doc.getDocs();
+
+    // Should have merged some small sections
+    expect(chunks.length).toBeLessThan(6); // Less than the original 6 sections
+
+    // Verify token counting metadata is present
+    expect(docs[0]?.metadata?.tokenCount).toBeDefined();
+    expect(docs[0]?.metadata?.chunkingStrategy).toBe('semantic-markdown');
+  });
+
+  it('should respect sibling/parent relationships in merging', async () => {
+    const text = `# Main Document
+
+## Section A
+Content for section A that is moderately long to ensure we have enough tokens for testing the semantic merging algorithm properly.
+
+### Subsection A1  
+This subsection has more content than the previous version to test the hierarchical merging behavior.
+
+### Subsection A2
+Another subsection with substantial content to verify proper semantic boundary handling.
+
+## Section B
+Content for section B that is also moderately sized with meaningful text to test cross-section merging behavior.
+
+### Subsection B1
+This final subsection contains enough content to test the bottom-up merging algorithm effectively.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 100, // Threshold that allows some merging but not everything
+    });
+
+    const chunks = doc.getText();
+    const docs = doc.getDocs();
+
+    // Should create fewer chunks than original sections due to merging
+    expect(chunks.length).toBeLessThan(7); // Less than original sections
+    expect(chunks.length).toBeGreaterThanOrEqual(1); // At least one chunk
+
+    // Verify sections maintain semantic coherence
+    const hasSection = chunks.some(chunk => chunk.includes('Section A') || chunk.includes('Subsection A1'));
+    expect(hasSection).toBe(true);
+
+    // Verify token counts are present and reasonable
+    expect(docs[0]?.metadata?.tokenCount).toBeDefined();
+    expect(docs[0]?.metadata?.tokenCount).toBeGreaterThan(0);
+    expect(docs[0]?.metadata?.chunkingStrategy).toBe('semantic-markdown');
+  });
+
+  it('should preserve code blocks during merging', async () => {
+    const text = `# Code Example
+
+## Installation
+Install the package:
+
+\`\`\`bash
+npm install example-package
+\`\`\`
+
+## Usage
+Here's how to use it:
+
+\`\`\`javascript
+const example = require('example-package');
+example.doSomething();
+\`\`\`
+
+## Configuration
+Set up your config file.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 300,
+    });
+
+    const chunks = doc.getText();
+
+    // Code blocks should be preserved intact
+    expect(chunks.some(chunk => chunk.includes('```bash'))).toBe(true);
+    expect(chunks.some(chunk => chunk.includes('```javascript'))).toBe(true);
+
+    // Should not split within code blocks
+    const bashChunk = chunks.find(chunk => chunk.includes('npm install'));
+    expect(bashChunk).toBeDefined();
+    expect(bashChunk).toContain('```bash');
+  });
+
+  it('should handle oversized sections with fallback when maxSemanticSize is set', async () => {
+    const text =
+      `# Large Section
+
+## Huge Content
+This is a very long section with lots of content. `.repeat(100) +
+      `
+
+## Small Section
+This is a small section that should be processed normally.
+
+## Another Small Section  
+Another small section for testing.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 100,
+      maxSemanticSize: 200, // Force fallback for large section
+    });
+
+    const chunks = doc.getText();
+
+    // Should have multiple chunks due to oversized section being split
+    expect(chunks.length).toBeGreaterThan(1);
+
+    // Small sections should still be merged if under threshold
+    const smallChunk = chunks.find(chunk => chunk.includes('Small Section') && chunk.includes('Another Small Section'));
+    expect(smallChunk).toBeDefined();
+  });
+
+  it('should work with different tiktoken models', async () => {
+    const text = `# Test Document
+
+## Section 1
+Some content for testing different tiktoken models and their token counting accuracy.
+
+## Section 2  
+More content to verify the token counting works correctly across different model encodings.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 100,
+      modelName: 'gpt-4',
+    });
+
+    const chunks = doc.getText();
+    const docs = doc.getDocs();
+
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(docs[0]?.metadata?.tokenCount).toBeDefined();
+    expect(typeof docs[0]?.metadata?.tokenCount).toBe('number');
+  });
+
+  it('should handle documents with no headers', async () => {
+    const text = `This is a document with no markdown headers.
+    
+Just regular paragraphs of text that should be processed as a single semantic unit since there are no headers to split on.
+
+More paragraphs here to test the behavior.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 200,
+    });
+
+    const chunks = doc.getText();
+
+    // Should return single chunk since no headers to split on
+    expect(chunks.length).toBe(1);
+    expect(chunks[0]).toContain('This is a document with no markdown headers');
+  });
+
+  it('should handle empty sections correctly', async () => {
+    const text = `# Document
+
+## Empty Section
+
+## Another Section
+Some content here.
+
+## Final Empty Section
+
+`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 100,
+    });
+
+    const chunks = doc.getText();
+
+    // Should handle empty sections gracefully
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.some(chunk => chunk.includes('Some content here'))).toBe(true);
+  });
+
+  it('should maintain bottom-up merging order (deepest first)', async () => {
+    const text = `# Root
+
+## Level 2A
+Content 2A
+
+### Level 3A  
+Short content 3A
+
+#### Level 4A
+Short content 4A
+
+### Level 3B
+Short content 3B
+
+## Level 2B
+Content 2B`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 200,
+    });
+
+    const chunks = doc.getText();
+
+    // The algorithm should merge from deepest level first
+    // Level 4 should merge with Level 3, then Level 3s might merge with Level 2
+    expect(chunks.length).toBeLessThan(7); // Less than original 7 sections
+
+    // Verify deep nesting is preserved in merged content
+    const deepChunk = chunks.find(chunk => chunk.includes('Level 4A') && chunk.includes('Level 3A'));
+    expect(deepChunk).toBeDefined();
+  });
+
+  it('should compare token accuracy vs character-based sizing', async () => {
+    // Use text with unicode and varying token densities
+    const text = `# Test Document
+
+## Unicode Section
+This section contains unicode characters: café, naïve, résumé, 中文, العربية
+
+## Code Section
+\`\`\`python
+def function_with_long_name_and_parameters(param1, param2, param3):
+    return param1 + param2 + param3
+\`\`\`
+
+## Regular Section
+Regular English text without special characters.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 150, // Token-based threshold
+    });
+
+    const docs = doc.getDocs();
+
+    // Verify token counts are provided in metadata
+    docs.forEach(doc => {
+      expect(doc.metadata.tokenCount).toBeDefined();
+      expect(typeof doc.metadata.tokenCount).toBe('number');
+      expect(doc.metadata.tokenCount).toBeGreaterThan(0);
+    });
+
+    // Token count should be different from character count for unicode text
+    const unicodeDoc = docs.find(doc => doc.text.includes('café'));
+    if (unicodeDoc) {
+      const charCount = unicodeDoc.text.length;
+      const tokenCount = unicodeDoc.metadata.tokenCount;
+
+      // For text with unicode, token count is often different from char count
+      expect(tokenCount).toBeDefined();
+      expect(tokenCount).not.toBe(charCount);
+    }
+  });
+});

@@ -7,6 +7,7 @@ import { HTMLHeaderTransformer, HTMLSectionTransformer } from './transformers/ht
 import { RecursiveJsonTransformer } from './transformers/json';
 import { LatexTransformer } from './transformers/latex';
 import { MarkdownHeaderTransformer, MarkdownTransformer } from './transformers/markdown';
+import { SemanticMarkdownTransformer } from './transformers/semantic-markdown';
 import { SentenceTransformer } from './transformers/sentence';
 import { TokenTransformer } from './transformers/token';
 import type {
@@ -18,6 +19,7 @@ import type {
   CharacterChunkOptions,
   TokenChunkOptions,
   MarkdownChunkOptions,
+  SemanticMarkdownChunkOptions,
   JsonChunkOptions,
   LatexChunkOptions,
   SentenceChunkOptions,
@@ -175,6 +177,9 @@ export class MDocument {
       case 'sentence':
         await this.chunkSentence(options);
         break;
+      case 'semantic-markdown':
+        await this.chunkSemanticMarkdown(options);
+        break;
       default:
         throw new Error(`Unknown strategy: ${strategy}`);
     }
@@ -290,6 +295,16 @@ export class MDocument {
       stripWhitespace: options?.stripWhitespace,
     });
 
+    const textSplit = rt.transformDocuments(this.chunks);
+    this.chunks = textSplit;
+  }
+
+  async chunkSemanticMarkdown(options?: SemanticMarkdownChunkOptions): Promise<void> {
+    const rt = SemanticMarkdownTransformer.fromTikToken({
+      options,
+      encodingName: options?.encodingName,
+      modelName: options?.modelName,
+    });
     const textSplit = rt.transformDocuments(this.chunks);
     this.chunks = textSplit;
   }
