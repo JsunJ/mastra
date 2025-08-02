@@ -111,7 +111,6 @@ const markdownChunkOptionsSchema = baseChunkOptionsSchema
 const semanticMarkdownChunkOptionsSchema = baseChunkOptionsSchema
   .extend({
     joinThreshold: z.number().positive().optional(),
-    maxSemanticSize: z.number().positive().optional(),
     encodingName: z.string().optional(),
     modelName: z.string().optional(),
     allowedSpecial: setOrAllSchema,

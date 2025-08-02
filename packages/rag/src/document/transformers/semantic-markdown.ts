@@ -16,13 +16,11 @@ interface MarkdownNode {
 export class SemanticMarkdownTransformer extends TextTransformer {
   private tokenizer: Tiktoken;
   private joinThreshold: number;
-  private maxSemanticSize?: number;
   private allowedSpecial: Set<string> | 'all';
   private disallowedSpecial: Set<string> | 'all';
 
   constructor({
     joinThreshold = 500,
-    maxSemanticSize,
     encodingName = 'cl100k_base',
     modelName,
     allowedSpecial = new Set(),
@@ -32,7 +30,6 @@ export class SemanticMarkdownTransformer extends TextTransformer {
     super(baseOptions);
 
     this.joinThreshold = joinThreshold;
-    this.maxSemanticSize = maxSemanticSize;
     this.allowedSpecial = allowedSpecial;
     this.disallowedSpecial = disallowedSpecial;
 
@@ -51,9 +48,6 @@ export class SemanticMarkdownTransformer extends TextTransformer {
     return this.tokenizer.encode(processedText, allowed, disallowed).length;
   }
 
-  /**
-   * Split markdown by headers into initial sections
-   */
   private splitMarkdownByHeaders(markdown: string): MarkdownNode[] {
     const sections: MarkdownNode[] = [];
     const lines = markdown.split('\n');
@@ -117,9 +111,6 @@ export class SemanticMarkdownTransformer extends TextTransformer {
     return sections;
   }
 
-  /**
-   * Core semantic merging algorithm: bottom-up merging from deepest headers
-   */
   private mergeSemanticSections(sections: MarkdownNode[]): MarkdownNode[] {
     if (sections.length === 0) return sections;
 
@@ -175,89 +166,14 @@ export class SemanticMarkdownTransformer extends TextTransformer {
     return workingSections;
   }
 
-  /**
-   * Handle oversized sections by applying fallback strategy
-   */
-  private handleOversizedSections(sections: MarkdownNode[]): MarkdownNode[] {
-    if (!this.maxSemanticSize) {
-      return sections; // No size limit, return as-is
-    }
-
-    const processedSections: MarkdownNode[] = [];
-
-    for (const section of sections) {
-      if (section.length <= this.maxSemanticSize) {
-        processedSections.push(section);
-      } else {
-        // Section exceeds max size - apply fallback chunking
-        console.warn(
-          `Semantic section "${section.title}" (${section.length} tokens) exceeds maxSemanticSize (${this.maxSemanticSize}). Applying fallback chunking.`,
-        );
-
-        // Use character-based chunking as fallback for oversized sections
-        const fallbackChunks = this.splitOversizedSection(section);
-        processedSections.push(...fallbackChunks);
-      }
-    }
-
-    return processedSections;
-  }
-
-  /**
-   * Fallback splitting for oversized sections
-   */
-  private splitOversizedSection(section: MarkdownNode): MarkdownNode[] {
-    const chunks: MarkdownNode[] = [];
-    const lines = section.content.split('\n');
-    let currentChunk = '';
-    let chunkIndex = 0;
-
-    for (const line of lines) {
-      const testChunk = currentChunk ? currentChunk + '\n' + line : line;
-
-      if (this.countTokens(testChunk) <= this.maxSemanticSize!) {
-        currentChunk = testChunk;
-      } else {
-        if (currentChunk) {
-          chunks.push({
-            title: `${section.title} (Part ${chunkIndex + 1})`,
-            depth: section.depth,
-            content: currentChunk,
-            length: this.countTokens(currentChunk),
-          });
-          chunkIndex++;
-        }
-        currentChunk = line;
-      }
-    }
-
-    if (currentChunk) {
-      chunks.push({
-        title: `${section.title} (Part ${chunkIndex + 1})`,
-        depth: section.depth,
-        content: currentChunk,
-        length: this.countTokens(currentChunk),
-      });
-    }
-
-    return chunks;
-  }
-
   splitText({ text }: { text: string }): string[] {
     if (!text.trim()) return [];
 
-    // Step 1: Split into sections by headers
     const initialSections = this.splitMarkdownByHeaders(text);
 
-    // Step 2: Apply semantic merging algorithm
     const mergedSections = this.mergeSemanticSections(initialSections);
 
-    // Step 3: Handle oversized sections if maxSemanticSize is set
-    const finalSections = this.handleOversizedSections(mergedSections);
-
-    // Step 4: Ensure all sections have headers and convert to text chunks
-    return finalSections.map(section => {
-      // Add header to content if the section has a title (not a preamble)
+    return mergedSections.map(section => {
       if (section.title) {
         const header = `${'#'.repeat(section.depth)} ${section.title}`;
         return `${header}\n${section.content}`;
@@ -274,9 +190,7 @@ export class SemanticMarkdownTransformer extends TextTransformer {
       this.splitText({ text }).forEach(chunk => {
         const metadata = {
           ..._metadatas[i],
-          // Add semantic-specific metadata
           tokenCount: this.countTokens(chunk),
-          chunkingStrategy: 'semantic-markdown',
         };
 
         if (this.addStartIndex) {

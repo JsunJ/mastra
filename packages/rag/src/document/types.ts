@@ -81,7 +81,6 @@ export type MarkdownChunkOptions = BaseChunkOptions & {
 
 export type SemanticMarkdownChunkOptions = BaseChunkOptions & {
   joinThreshold?: number;
-  maxSemanticSize?: number;
   encodingName?: TiktokenEncoding;
   modelName?: TiktokenModel;
   allowedSpecial?: Set<string> | 'all';
