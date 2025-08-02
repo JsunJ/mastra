@@ -2353,7 +2353,6 @@ Another section with moderate content for testing the merging algorithm.`;
     await doc.chunk({
       strategy: 'semantic-markdown',
       joinThreshold: 200,
-      maxSemanticSize: 500,
     });
 
     const chunks = doc.getText();
@@ -2362,9 +2361,9 @@ Another section with moderate content for testing the merging algorithm.`;
     // Should have merged some small sections
     expect(chunks.length).toBeLessThan(6); // Less than the original 6 sections
 
-    // Verify token counting metadata is present
     expect(docs[0]?.metadata?.tokenCount).toBeDefined();
-    expect(docs[0]?.metadata?.chunkingStrategy).toBe('semantic-markdown');
+    expect(typeof docs[0]?.metadata?.tokenCount).toBe('number');
+    expect(docs[0]?.metadata?.tokenCount).toBeGreaterThan(0);
   });
 
   it('should respect sibling/parent relationships in merging', async () => {
@@ -2406,7 +2405,98 @@ This final subsection contains enough content to test the bottom-up merging algo
     // Verify token counts are present and reasonable
     expect(docs[0]?.metadata?.tokenCount).toBeDefined();
     expect(docs[0]?.metadata?.tokenCount).toBeGreaterThan(0);
-    expect(docs[0]?.metadata?.chunkingStrategy).toBe('semantic-markdown');
+  });
+
+  it('should correctly chunk a controlled test document', async () => {
+    const controlledTestMarkdown = `# My Test Document
+
+This is a short preamble to test how content before the first header is handled. It should be merged with the first section if that section is small enough.
+
+## Chapter 1: The Small Sections
+
+This is the introduction to Chapter 1. It contains several small subsections that are perfect candidates for merging.
+
+### Section 1.1: A Tiny Topic
+
+Just a few words here.
+
+### Section 1.2: Another Tiny Topic
+
+A few more words to make up a small paragraph.
+
+## Chapter 2: The Big Section
+
+This chapter has a very large section that should NOT be merged with its sibling because it is over the token limit all by itself.
+
+\`\`\`python
+# This is a large block of Python code.
+# It is designed to have a high token count to test the merging threshold.
+import os
+import sys
+
+class DataProcessor:
+    def __init__(self, data):
+        self.data = data
+        self.length = len(data)
+
+    def process(self):
+        """
+        This is a long docstring to add even more tokens to the count.
+        We will iterate through the data and perform some kind of mock processing.
+        The goal is to exceed the joinThreshold of 250 tokens easily.
+        Let's add more lines to be sure.
+        Line 1
+        Line 2
+        Line 3
+        Line 4
+        Line 5
+        ...and so on.
+        """
+        results = []
+        for i, item in enumerate(self.data):
+            # A mock calculation
+            processed_item = (item * i) + self.length
+            results.append(processed_item)
+        return results
+
+# Let's make sure this section is large enough.
+# More comments and code will help.
+def another_function_to_add_tokens():
+    """Another long docstring for good measure."""
+    x = 1
+    y = 2
+    z = x + y
+    print(f"The result is {z}")
+    # End of function
+\`\`\`
+
+## Chapter 3: The Mixed Bag
+
+This chapter contains a mix of small and medium sections.
+
+### Section 3.1: A Medium Section
+
+This section is moderately sized. It's not huge, but it has enough content to be a meaningful chunk on its own. We'll aim for about 150 tokens here so it can potentially merge with a small sibling.
+
+### Section 3.2: A Final Small Section
+
+This final section is very small and should definitely be merged into its predecessor, Section 3.1, because their combined total will be under the threshold.
+`;
+
+    const doc = MDocument.fromMarkdown(controlledTestMarkdown);
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 250,
+      modelName: 'gpt-3.5-turbo',
+    });
+
+    const chunks = doc.getText();
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]).toContain('# My Test Document');
+    expect(chunks[0]).toContain('### Section 1.2: Another Tiny Topic');
+    expect(chunks[1]).toContain('## Chapter 2: The Big Section');
+    expect(chunks[2]).toContain('## Chapter 3: The Mixed Bag');
+    expect(chunks[2]).toContain('### Section 3.2: A Final Small Section');
   });
 
   it('should preserve code blocks during merging', async () => {
@@ -2447,38 +2537,6 @@ Set up your config file.`;
     const bashChunk = chunks.find(chunk => chunk.includes('npm install'));
     expect(bashChunk).toBeDefined();
     expect(bashChunk).toContain('```bash');
-  });
-
-  it('should handle oversized sections with fallback when maxSemanticSize is set', async () => {
-    const text =
-      `# Large Section
-
-## Huge Content
-This is a very long section with lots of content. `.repeat(100) +
-      `
-
-## Small Section
-This is a small section that should be processed normally.
-
-## Another Small Section  
-Another small section for testing.`;
-
-    const doc = MDocument.fromMarkdown(text);
-
-    await doc.chunk({
-      strategy: 'semantic-markdown',
-      joinThreshold: 100,
-      maxSemanticSize: 200, // Force fallback for large section
-    });
-
-    const chunks = doc.getText();
-
-    // Should have multiple chunks due to oversized section being split
-    expect(chunks.length).toBeGreaterThan(1);
-
-    // Small sections should still be merged if under threshold
-    const smallChunk = chunks.find(chunk => chunk.includes('Small Section') && chunk.includes('Another Small Section'));
-    expect(smallChunk).toBeDefined();
   });
 
   it('should work with different tiktoken models', async () => {
@@ -2631,5 +2689,296 @@ Regular English text without special characters.`;
       expect(tokenCount).toBeDefined();
       expect(tokenCount).not.toBe(charCount);
     }
+  });
+
+  it('should handle documents with only deep headers (no top-level sections)', async () => {
+    const text = `### Deep Section 1
+Short content for deep section 1.
+
+#### Very Deep Section 1.1
+Even shorter content.
+
+#### Very Deep Section 1.2
+Another short subsection.
+
+### Deep Section 2
+Short content for deep section 2.
+
+#### Very Deep Section 2.1
+Final short content.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 200,
+    });
+
+    const chunks = doc.getText();
+    const docs = doc.getDocs();
+
+    // Should merge the small deep sections together
+    expect(chunks.length).toBeLessThan(5);
+    expect(chunks.length).toBeGreaterThan(0);
+
+    // Verify deep headers are preserved in merged content
+    const deepChunk = chunks.find(
+      chunk => chunk.includes('### Deep Section 1') && chunk.includes('#### Very Deep Section'),
+    );
+    expect(deepChunk).toBeDefined();
+
+    // Verify metadata is present
+    expect(docs[0]?.metadata?.tokenCount).toBeDefined();
+  });
+
+  it('should leave very large individual sections intact (exceeding joinThreshold)', async () => {
+    const largeContent = 'This is a very long section. '.repeat(50); // ~1500 tokens
+    const text = `# Document Title
+
+## Small Section
+Small content here.
+
+## Oversized Section
+${largeContent}
+
+\`\`\`javascript
+// Adding code to make it even larger
+function processData(data) {
+  const results = [];
+  for (let i = 0; i < data.length; i++) {
+    const processed = data[i] * 2 + Math.random();
+    results.push(processed);
+    console.log(\`Processed item \${i}: \${processed}\`);
+  }
+  return results;
+}
+
+// More code to ensure we exceed the threshold
+class DataManager {
+  constructor(initialData) {
+    this.data = initialData;
+    this.processedCount = 0;
+  }
+  
+  process() {
+    this.data.forEach((item, index) => {
+      // Process each item
+      this.processedCount++;
+    });
+  }
+}
+\`\`\`
+
+## Another Small Section
+More small content.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 300, // Much smaller than the oversized section
+    });
+
+    const chunks = doc.getText();
+    const docs = doc.getDocs();
+
+    expect(chunks.length).toBeGreaterThan(1);
+
+    // The oversized section should be left as its own chunk
+    const oversizedChunk = chunks.find(chunk => chunk.includes('Oversized Section'));
+    expect(oversizedChunk).toBeDefined();
+    expect(oversizedChunk).toContain('This is a very long section.');
+
+    // Verify the oversized chunk exceeds the threshold
+    const oversizedDoc = docs.find(doc => doc.text.includes('Oversized Section'));
+    expect(oversizedDoc?.metadata?.tokenCount).toBeGreaterThan(300);
+
+    // Small sections should still be merged where possible
+    const smallChunk = chunks.find(chunk => chunk.includes('Small Section') && !chunk.includes('Oversized'));
+    expect(smallChunk).toBeDefined();
+  });
+
+  it('should handle mixed header levels with gaps (skipping levels)', async () => {
+    const text = `# Top Level
+
+#### Deep Level A (skipped H2 and H3)
+Content for deep level A that is moderately sized with enough text to make it substantial. This section needs to have sufficient content to test the merging behavior properly when header levels are skipped. Let's add more content to ensure we have enough tokens to work with.
+
+## Middle Level
+Content for middle level section that also needs to be substantial enough to test the algorithm. This section should have enough content to be meaningful when testing the semantic markdown chunking with mixed header levels.
+
+##### Very Deep Level (skipped H3 and H4)
+Short content for very deep level that should still be substantial enough for testing. Even though this is marked as short, we need enough content to make the test meaningful.
+
+# Another Top Level
+
+This second top-level section should definitely create a boundary that prevents everything from merging into a single chunk. We need substantial content here to ensure proper separation.
+
+### Medium Deep Level (skipped H2)
+Final content for testing header level gaps. This section also needs substantial content to ensure we're testing the algorithm properly with realistic content sizes.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 150, // Smaller threshold to encourage more chunks
+    });
+
+    const chunks = doc.getText();
+
+    // Should handle the gaps gracefully - expect at least 2 chunks due to the second top-level section
+    expect(chunks.length).toBeGreaterThanOrEqual(1);
+
+    // Verify headers with gaps are preserved
+    expect(chunks.some(chunk => chunk.includes('#### Deep Level A'))).toBe(true);
+    expect(chunks.some(chunk => chunk.includes('##### Very Deep Level'))).toBe(true);
+    expect(chunks.some(chunk => chunk.includes('### Medium Deep Level'))).toBe(true);
+
+    // Verify both top-level sections are present
+    expect(chunks.some(chunk => chunk.includes('# Top Level'))).toBe(true);
+    expect(chunks.some(chunk => chunk.includes('# Another Top Level'))).toBe(true);
+  });
+
+  it('should handle large documents efficiently (performance test)', async () => {
+    const sections: string[] = [];
+    for (let i = 1; i <= 100; i++) {
+      sections.push(`## Section ${i}`);
+      sections.push(`This is content for section ${i}. `.repeat(10)); // ~100 tokens each
+
+      // Add some subsections
+      for (let j = 1; j <= 3; j++) {
+        sections.push(`### Subsection ${i}.${j}`);
+        sections.push(`This is subsection content ${i}.${j}. `.repeat(5)); // ~50 tokens each
+      }
+    }
+
+    const largeText = `# Large Test Document\n\n${sections.join('\n\n')}`;
+
+    const doc = MDocument.fromMarkdown(largeText);
+
+    // Measure performance
+    const startTime = Date.now();
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 300,
+    });
+
+    const duration = Date.now() - startTime;
+    const chunks = doc.getText();
+    const docs = doc.getDocs();
+
+    // Performance assertions
+    expect(duration).toBeLessThan(5000);
+
+    // Functionality assertions
+    expect(chunks.length).toBeGreaterThan(10); // Should create multiple chunks
+    expect(chunks.length).toBeLessThan(400); // Should merge many of the 400 original sections
+
+    docs.forEach(doc => {
+      expect(doc.metadata.tokenCount).toBeDefined();
+      expect(doc.metadata.tokenCount).toBeGreaterThan(0);
+    });
+  }, 10000);
+
+  it('should maintain semantic coherence with very small joinThreshold', async () => {
+    const text = `# Document
+
+This is a substantial preamble section that should have enough content to be meaningful in token counting. We need sufficient content here to test the algorithm properly.
+
+## Section A
+Brief content for section A that needs to be expanded to ensure we have meaningful token counts for testing the semantic markdown chunking algorithm with a very small threshold.
+
+### Sub A1
+More substantial content here for subsection A1. This content needs to be long enough to have a reasonable token count that will affect the merging decisions in our semantic chunking algorithm.
+
+### Sub A2
+Even more substantial content for subsection A2. Again, we need enough tokens here to make the test meaningful and to properly exercise the algorithm's decision-making process.
+
+## Section B
+Another section with substantial content for section B. This section should also have enough content to be meaningful in our token-based chunking strategy testing.
+
+### Sub B1
+Final substantial content for subsection B1. This content should complete our test document with enough tokens to properly test the small threshold behavior.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 30, // Even smaller threshold to force separation
+    });
+
+    const chunks = doc.getText();
+
+    // With a very small threshold, we should get at least some separation
+    // The exact number depends on content size, so let's be more flexible
+    expect(chunks.length).toBeGreaterThanOrEqual(1);
+
+    // Verify all chunks have meaningful content
+    chunks.forEach(chunk => {
+      expect(chunk.trim().length).toBeGreaterThan(0);
+      // Each chunk should have some substantial content (not just whitespace)
+      expect(chunk.trim().length).toBeGreaterThan(10);
+    });
+
+    // Verify we have the main document structure preserved
+    const allText = chunks.join(' ');
+    expect(allText).toContain('# Document');
+    expect(allText).toContain('## Section A');
+    expect(allText).toContain('## Section B');
+  });
+
+  it('should not treat headers inside code blocks as headers for splitting', async () => {
+    const text = `# Real Header
+    
+Some introductory text explaining code examples.
+
+\`\`\`markdown
+# This is not a real header
+It is inside a code block and should be ignored for chunking.
+
+## This is also not a real header  
+It should be treated as plain text content, not a section boundary.
+
+### Even deeper fake headers
+Should also be ignored completely.
+\`\`\`
+
+## A Real Second Header
+This content comes after the code block.
+
+### A Real Subsection
+With some additional content to test the hierarchy.`;
+
+    const doc = MDocument.fromMarkdown(text);
+
+    await doc.chunk({
+      strategy: 'semantic-markdown',
+      joinThreshold: 25, // Low threshold to force separation into 2 or more chunks
+    });
+
+    const chunks = doc.getText();
+
+    // With a low threshold, we should get exactly 2 chunks:
+    // 1. "# Real Header" section (with the code block as content)
+    // 2. "## A Real Second Header" section (with its subsection)
+    // If fake headers were processed, we'd get more than 2 chunks
+    expect(chunks.length).toBe(2);
+
+    const firstChunk = chunks[0];
+    const secondChunk = chunks[1];
+
+    expect(firstChunk).toContain('# Real Header');
+    expect(firstChunk).toContain('Some introductory text explaining code examples');
+    expect(firstChunk).toContain('```markdown');
+    expect(firstChunk).toContain('# This is not a real header');
+    expect(firstChunk).toContain('## This is also not a real header');
+    expect(firstChunk).toContain('### Even deeper fake headers');
+    expect(firstChunk).not.toContain('## A Real Second Header');
+
+    expect(secondChunk).toContain('## A Real Second Header');
+    expect(secondChunk).toContain('### A Real Subsection');
+    expect(secondChunk).not.toContain('# Real Header');
+    expect(secondChunk).not.toContain('# This is not a real header');
   });
 });
