@@ -6,7 +6,6 @@ import type { VoiceEventType } from '@mastra/core/voice';
 import { GoogleAuth } from 'google-auth-library';
 import type { WebSocket as WSType } from 'ws';
 import { WebSocket } from 'ws';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import type {
   GeminiLiveVoiceConfig,
   GeminiLiveVoiceOptions,
@@ -17,6 +16,7 @@ import type {
   GeminiSessionConfig,
   AudioConfig,
 } from './types';
+import { transformTools } from './utils';
 
 // export type {
 //   GeminiLiveVoiceConfig,
@@ -121,19 +121,10 @@ export class GeminiLiveVoice extends MastraVoice<
    *
    * @param config Configuration options
    */
-  constructor(config: GeminiLiveVoiceConfig = {}) {
-    super({
-      speechModel: {
-        name: config.model || DEFAULT_MODEL,
-        apiKey: config.apiKey || process.env.GOOGLE_API_KEY,
-      },
-      speaker: config.speaker || DEFAULT_VOICE,
-      realtimeConfig: {
-        model: config.model || DEFAULT_MODEL,
-        apiKey: config.apiKey || process.env.GOOGLE_API_KEY,
-        options: config,
-      },
-    });
+  constructor(private config: GeminiLiveVoiceConfig = {}) {
+    // Follow OpenAI Realtime pattern - call super() with no VoiceConfig
+    // Real-time providers manage their own configuration
+    super();
 
     // Validate API key
     const apiKey = config.apiKey || process.env.GOOGLE_API_KEY;
@@ -153,6 +144,9 @@ export class GeminiLiveVoice extends MastraVoice<
     this.audioConfig = DEFAULT_AUDIO_CONFIG;
     this.sessionConfig = config.sessionConfig;
     this.responseModality = config.responseModality || 'TEXT'; // Default to TEXT for transcription
+
+    // Set speaker property using default voice (fixes unused DEFAULT_VOICE warning)
+    this.speaker = config.speaker || DEFAULT_VOICE;
 
     // Initialize authentication properties
     this.serviceAccountKeyFile = config.serviceAccountKeyFile;
@@ -287,6 +281,17 @@ export class GeminiLiveVoice extends MastraVoice<
         }
       }
     }, 'gemini-live.connect')();
+  }
+
+  /**
+   * Disconnects from the Gemini Live API and cleans up resources.
+   * Synchronous method following OpenAI Realtime pattern.
+   */
+  close(): void {
+    if (this.ws) {
+      this.ws.close();
+      this.connectionState = 'disconnected';
+    }
   }
 
   /**
@@ -701,6 +706,7 @@ export class GeminiLiveVoice extends MastraVoice<
     if (!tools) {
       this.tools = undefined;
       this.transformedTools = undefined;
+      this.log('Tools cleared');
       return;
     }
 
@@ -712,12 +718,14 @@ export class GeminiLiveVoice extends MastraVoice<
       names: this.transformedTools.map(t => t.geminiTool.name),
     });
 
-    // If connected, warn that tools can't be updated dynamically
+    // Gemini Live API requires tools to be configured during initial setup.
+    // Unlike OpenAI Realtime, tools cannot be updated after connection.
+    // If not connected yet, tools will be included in the next connection setup.
+    // If already connected, we log info but don't warn (this is normal Agent workflow).
     if (this.connectionState === 'connected' && this.ws?.readyState === WebSocket.OPEN) {
-      this.log('Warning: Tools cannot be updated after connection with Gemini Live API.');
-      this.log('To use these tools, please disconnect and reconnect.');
-      // Still call sendToolsUpdate which will emit an error event
-      this.sendToolsUpdate();
+      this.log('Info: Tools added to connected Gemini Live session. Tools are configured during initial setup only.');
+      this.log('Current session already includes tools from initial configuration.');
+      // Note: Unlike the warning before, we don't call sendToolsUpdate as it's not supported
     }
   }
 
@@ -971,8 +979,33 @@ export class GeminiLiveVoice extends MastraVoice<
         // Handle audio content
         // Check both inline_data and inlineData
         const inlineData = part.inline_data || part.inlineData;
-        if (inlineData && inlineData.mime_type?.includes('audio')) {
+
+        // Debug: Log inline data structure
+        if (inlineData) {
+          this.log('Inline data detected:', {
+            hasMimeType: !!inlineData.mime_type,
+            mimeType: inlineData.mime_type,
+            hasData: !!inlineData.data,
+            dataLength: inlineData.data?.length || 0,
+            dataKeys: Object.keys(inlineData),
+          });
+        }
+
+        // Enhanced audio detection - in AUDIO mode, treat any inline data as potential audio
+        const isAudioMode = this.responseModality === 'AUDIO';
+        const hasInlineData = !!inlineData?.data;
+        const isAudioMimeType = inlineData?.mime_type?.includes('audio');
+
+        if (inlineData && hasInlineData && (isAudioMimeType || isAudioMode)) {
           try {
+            this.log('Processing inline data as audio:', {
+              mimeType: inlineData.mime_type || 'unknown',
+              dataLength: inlineData.data?.length || 0,
+              isAudioMode,
+              isAudioMimeType,
+              forced: !isAudioMimeType && isAudioMode,
+            });
+
             const int16Array = this.base64ToInt16Array(inlineData.data);
 
             this.emit('speaking', {
@@ -980,14 +1013,26 @@ export class GeminiLiveVoice extends MastraVoice<
               audioData: int16Array,
               sampleRate: this.audioConfig.outputSampleRate, // Gemini Live outputs at 24kHz
             });
+
+            this.log('Speaking event emitted successfully');
           } catch (error) {
-            this.log('Failed to process audio data', error);
-            this.emit('error', {
-              message: 'Failed to process received audio data',
-              code: 'audio_processing_error',
-              details: error,
-            });
+            this.log('Failed to process inline data as audio', error);
+            // Don't emit error for audio processing in permissive mode
+            if (isAudioMimeType) {
+              this.emit('error', {
+                message: 'Failed to process audio data',
+                code: 'audio_processing_error',
+                details: error,
+              });
+            }
           }
+        } else if (inlineData) {
+          this.log('Inline data found but skipped:', {
+            mimeType: inlineData.mime_type,
+            hasData: hasInlineData,
+            isAudioMode,
+            reason: !hasInlineData ? 'no data' : 'not audio mode and not audio mime type',
+          });
         }
       }
     }
@@ -1162,7 +1207,12 @@ export class GeminiLiveVoice extends MastraVoice<
       setup: setupConfig,
     };
 
-    this.log('Sending initial config', setupMessage);
+    // Deep log the full setup payload including tools to verify schema
+    try {
+      this.log('Sending initial config', JSON.stringify(setupMessage, null, 2));
+    } catch {
+      this.log('Sending initial config', setupMessage);
+    }
 
     try {
       this.ws.send(JSON.stringify(setupMessage));
@@ -1941,93 +1991,23 @@ export class GeminiLiveVoice extends MastraVoice<
   }
 
   /**
-   * Transform Mastra tools to Gemini format
+   * Transform Mastra tools to Gemini format using shared utils
    * @private
    */
   private transformTools(
     tools: ToolsInput,
   ): Array<{ geminiTool: GeminiToolConfig; execute: (args: any) => Promise<any> }> {
-    const transformedTools: Array<{ geminiTool: GeminiToolConfig; execute: (args: any) => Promise<any> }> = [];
+    const utilsTransformed = transformTools(tools);
 
-    for (const [name, tool] of Object.entries(tools)) {
-      let parameters: any;
-
-      // Extract parameters from tool definition
-      if ('inputSchema' in tool && tool.inputSchema) {
-        if (this.isZodObject(tool.inputSchema)) {
-          parameters = zodToJsonSchema(tool.inputSchema);
-          delete parameters.$schema;
-        } else {
-          parameters = tool.inputSchema;
-        }
-      } else if ('parameters' in tool) {
-        if (this.isZodObject(tool.parameters)) {
-          parameters = zodToJsonSchema(tool.parameters);
-          delete parameters.$schema;
-        } else {
-          parameters = tool.parameters;
-        }
-      } else {
-        this.log(`Tool ${name} has neither inputSchema nor parameters, skipping`);
-        continue;
-      }
-
-      // Create Gemini tool configuration
-      const geminiTool: GeminiToolConfig = {
-        name,
-        description: tool.description || `Tool: ${name}`,
-        parameters,
-      };
-
-      if (tool.execute) {
-        // Create an adapter function for tool execution
-        const executeAdapter = async (args: any) => {
-          try {
-            if (!tool.execute) {
-              throw new Error(`Tool ${name} has no execute function`);
-            }
-
-            // For ToolAction, the first argument is a context object
-            if ('inputSchema' in tool) {
-              return await tool.execute({ context: args });
-            }
-            // For VercelTool, pass args directly with minimal options
-            else {
-              const options = {
-                toolCallId: 'gemini-tool-call',
-                messages: [],
-              };
-              return await tool.execute(args, options);
-            }
-          } catch (error) {
-            this.log(`Error executing tool ${name}:`, error);
-            throw error;
-          }
-        };
-
-        transformedTools.push({ geminiTool, execute: executeAdapter });
-      } else {
-        this.log(`Tool ${name} has no execute function, skipping`);
-      }
-    }
-
-    return transformedTools;
-  }
-
-  /**
-   * Check if a schema is a Zod object
-   * @private
-   */
-  private isZodObject(schema: unknown): boolean {
-    return (
-      !!schema &&
-      typeof schema === 'object' &&
-      '_def' in schema &&
-      !!(schema as any)._def &&
-      typeof (schema as any)._def === 'object' &&
-      'typeName' in (schema as any)._def &&
-      (schema as any)._def.typeName === 'ZodObject'
-    );
+    // Convert from utils format to our internal format
+    return utilsTransformed.map(({ geminiTool, execute }) => ({
+      geminiTool: {
+        name: geminiTool.name,
+        description: geminiTool.description,
+        parameters: geminiTool.parameters,
+      },
+      execute,
+    }));
   }
 
   /**

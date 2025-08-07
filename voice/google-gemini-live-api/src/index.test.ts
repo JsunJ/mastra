@@ -92,9 +92,20 @@ describe('GeminiLiveVoice', () => {
     });
 
     it('should throw error when no API key for Gemini API', () => {
-      expect(() => {
-        new GeminiLiveVoice({});
-      }).toThrow('API key is required');
+      // Clear environment variable for this test
+      const originalApiKey = process.env.GOOGLE_API_KEY;
+      delete process.env.GOOGLE_API_KEY;
+
+      try {
+        expect(() => {
+          new GeminiLiveVoice({});
+        }).toThrow('Google API key is required');
+      } finally {
+        // Restore original environment variable
+        if (originalApiKey) {
+          process.env.GOOGLE_API_KEY = originalApiKey;
+        }
+      }
     });
 
     it('should throw error when no project for Vertex AI', () => {
@@ -353,8 +364,8 @@ describe('GeminiLiveVoice', () => {
       const tools = {
         search: {
           description: 'Search the web',
-          parameters: { type: 'object', properties: { query: { type: 'string' } } },
-          execute: async (_args: any) => ({ results: [] }),
+          inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+          execute: async ({ context }: { context: any }) => ({ results: [] }),
         },
       };
 
@@ -368,7 +379,7 @@ describe('GeminiLiveVoice', () => {
       const tools = {
         testTool: {
           description: 'Test tool',
-          parameters: { type: 'object', properties: {} },
+          inputSchema: { type: 'object', properties: {} },
           execute: mockExecute,
         },
       };
@@ -399,11 +410,10 @@ describe('GeminiLiveVoice', () => {
 
       await (voice as any).handleToolCall(toolCallData);
 
-      // Our implementation adds extra context to tool calls
-      expect(mockExecute).toHaveBeenCalledWith(
-        { test: 'value' },
-        expect.objectContaining({ messages: expect.any(Array), toolCallId: expect.any(String) }),
-      );
+      // Now tools receive { context } with args
+      expect(mockExecute).toHaveBeenCalledWith({
+        context: { test: 'value' },
+      });
       expect(mockWs.send).toHaveBeenCalled();
     });
 
@@ -411,8 +421,8 @@ describe('GeminiLiveVoice', () => {
       const tools = {
         testTool: {
           description: 'Test tool',
-          parameters: { type: 'object', properties: {} },
-          execute: async () => ({ result: 'success' }),
+          inputSchema: { type: 'object', properties: {} },
+          execute: async ({ context }: { context: any }) => ({ result: 'success' }),
         },
       };
 
@@ -451,8 +461,8 @@ describe('GeminiLiveVoice', () => {
       const tools = {
         errorTool: {
           description: 'Error tool',
-          parameters: { type: 'object', properties: {} },
-          execute: async () => {
+          inputSchema: { type: 'object', properties: {} },
+          execute: async ({ context }: { context: any }) => {
             throw new Error('Tool failed');
           },
         },
